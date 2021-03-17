@@ -55,16 +55,12 @@ if [ -z "${DEPTH}" ]; then
 fi
 
 MAX_FAIL_LEVEL="CRITICAL"
+
 if [ "${USING_LIBRESSL}" -eq 1 ]; then
     echo "You're using LibreSSL, disabling -verify_hostname and verify depth, setting max to WARNING" 1>&2
     MAX_FAIL_LEVEL="WARNING"
-    if [ -n "${DEBUG}" ]; then
-        RESULT="$(printf "\n\n\n\n" | openssl s_client -connect "${HOSTNAME}:${PORT}" \
-            -servername "${HOSTNAME}" 2>&1)"
-    else
-        RESULT="$(printf "\n\n\n\n" | openssl s_client -connect "${HOSTNAME}:${PORT}" \
-            -servername "${HOSTNAME}" -quiet -no_ign_eof > /dev/null 2>&1)"
-    fi
+    RESULT="$(printf "\n\n\n\n" | openssl s_client -connect "${HOSTNAME}:${PORT}" \
+        -servername "${HOSTNAME}" 2>&1)"
 
 else
     # using OpenSSL
@@ -72,30 +68,19 @@ else
         echo "Using verify depth ${DEPTH}"
     fi
 
-    if [ -n "${DEBUG}" ]; then
-        RESULT="$(echo '/' | openssl s_client -connect "${HOSTNAME}:${PORT}" \
+    RESULT="$(echo '/' | openssl s_client -connect "${HOSTNAME}:${PORT}" \
             -servername "${HOSTNAME}" \
             -verify "${DEPTH}" \
             -verify_return_error \
             -verify_hostname "${HOSTNAME}" 2>&1)"
-    else
-        RESULT="$(echo '/' | openssl s_client -connect "${HOSTNAME}:${PORT}" \
-            -servername "${HOSTNAME}" \
-            -verify "${DEPTH}" \
-            -verify_return_error \
-            -verify_hostname "${HOSTNAME}" -quiet 2>&1)"
-
-    fi
 fi
 
-#ERROR_COUNT="$( echo "${RESULT}" | grep -c "verify error"  )"
-#if [ -n "${DEBUG}" ]; then
-#    echo "ERROR_COUNT: ${ERROR_COUNT}"
-#fi
+if [ -n "${DEBUG}" ]; then
+    echo "RESULT"
+    echo "${RESULT}"
+    echo "END RESULT"
+fi
 
-
-
-#if [ "${ERROR_COUNT}" -eq 0 ]; then
 if [ "$(echo "${RESULT}" | grep -c "Verify return code: 0 (ok)")" -eq 1 ]; then
     RESULT="OK"
 else

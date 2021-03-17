@@ -8,7 +8,7 @@ if [ "$(./check_certificate badssl.com --depth=3 --port=443 2>/dev/null | grep -
     FAILED=1
     echo "Failed to check a valid cert"
 fi
-
+export DEBUG=1
 if [ "$(./check_certificate revoked.badssl.com --depth=3 --port=443 2>/dev/null | grep -cE "^(CRITICAL|WARNING) revoked.badssl.com$")" -ne 1 ]; then
     FAILED=1
     echo "Failed to check revoked"
