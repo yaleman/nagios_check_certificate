@@ -9,7 +9,7 @@
 
 if [ -z "$1" ]; then
     echo "Please specify at least a hostname...
-usage: check_certificate <hostname> [-p,--port=<port>] [-d,--depth=<cert_verify_depth>]"
+usage: check_certificate <hostname> [-p,--port=<port>] [-d,--depth=<cert_verify_depth>] [--error-self-signed|--no-error-self-signed]"
     exit 1
 fi
 
@@ -22,7 +22,14 @@ else
     USING_LIBRESSL=0
 fi
 ###########################
-### START ARGUMENT HANDLING
+### Defaults
+ERROR_SELF_SIGNED=1
+PORT=443
+DEPTH=2
+MAX_FAIL_LEVEL="CRITICAL"
+
+###########################
+### Start argument handling
 for i in "${@:2}"
 do
 case $i in
@@ -38,6 +45,18 @@ case $i in
         echo "Setting certificate depth to ${DEPTH}"
     fi
     ;;
+    --error-self-signed)
+    ERROR_SELF_SIGNED=1
+    if [ -n "${DEBUG}" ]; then
+        echo "Failing on self-signed"
+    fi
+    ;;
+    --no-error-self-signed)
+    ERROR_SELF_SIGNED=0
+    if [ -n "${DEBUG}" ]; then
+        echo "Not failing on self-signed"
+    fi
+    ;;
     *)
     echo "Unknown option: $i"
     exit 3 # exit 3 = unknown in nagios
@@ -45,21 +64,10 @@ case $i in
 esac
 done
 
-
-if [ -z "${PORT}" ]; then
-    PORT=443
-fi
-
-if [ -z "${DEPTH}" ]; then
-    DEPTH=2
-fi
-
-MAX_FAIL_LEVEL="CRITICAL"
-
 if [ "${USING_LIBRESSL}" -eq 1 ]; then
     echo "You're using LibreSSL, disabling -verify_hostname and verify depth, setting max to WARNING" 1>&2
     MAX_FAIL_LEVEL="WARNING"
-    RESULT="$(printf "\n\n\n\n" | openssl s_client -connect "${HOSTNAME}:${PORT}" \
+    CMD_OUTPUT="$(printf "\n\n\n\n" | openssl s_client -connect "${HOSTNAME}:${PORT}" \
         -servername "${HOSTNAME}" 2>&1)"
 
 else
@@ -68,23 +76,57 @@ else
         echo "Using verify depth ${DEPTH}"
     fi
 
-    RESULT="$(echo '/' | openssl s_client -connect "${HOSTNAME}:${PORT}" \
+    VERIFY_HOSTNAME="-verify_hostname ${HOSTNAME}"
+    if [ "$(openssl help s_client 2>&1 | grep -c verify_hostname)" -eq 0 ]; then
+        if [ -n "${DEBUG}" ]; then
+            echo "Not using -verify_hostname"
+        fi
+        VERIFY_HOSTNAME=""
+    fi
+    #shellcheck disable=SC2086
+    CMD_OUTPUT="$(echo '/' | openssl s_client -connect "${HOSTNAME}:${PORT}" \
             -servername "${HOSTNAME}" \
             -verify "${DEPTH}" \
             -verify_return_error \
-            -verify_hostname "${HOSTNAME}" 2>&1)"
+            ${VERIFY_HOSTNAME} 2>&1)"
 fi
 
 if [ -n "${DEBUG}" ]; then
     echo "RESULT"
-    echo "${RESULT}"
+    echo "${CMD_OUTPUT}"
     echo "END RESULT"
 fi
 
-if [ "$(echo "${RESULT}" | grep -c "Verify return code: 0 (ok)")" -eq 1 ]; then
-    RESULT="OK"
-else
+RESULT="OK"
+if [ "$(echo "${CMD_OUTPUT}" | grep -c 'Verify return code: 0 (ok)')" -ne 1 ]; then
+    if [ -n "${DEBUG}" ]; then
+        echo "Didn't find 'Verify return code: 0 (ok)', marking bad"
+        echo "${CMD_OUTPUT}" | grep -o "Verify return code"
+    fi
     RESULT="${MAX_FAIL_LEVEL}"
+fi
+
+if [ "$(echo "${CMD_OUTPUT}" | grep -c "Verification error: certificate has expired")" -eq 1 ]; then
+    if [ -n "${DEBUG}" ]; then
+        echo "Expired cert, marking bad"
+    fi
+    RESULT="${MAX_FAIL_LEVEL}"
+fi
+
+if [ "$(echo "${CMD_OUTPUT}" | grep -c 'verify error:num=62:Hostname mismatch')" -eq 1 ]; then
+    if [ -n "${DEBUG}" ]; then
+        echo "Hostname mismatch, marking bad"
+    fi
+    RESULT="${MAX_FAIL_LEVEL}"
+fi
+
+if [ "${ERROR_SELF_SIGNED}" -eq 1 ]; then
+    if [ "$(echo "${CMD_OUTPUT}" | grep -c 'verify error:num=19:self signed certificate in certificate chain')" -eq 1 ]; then
+        if [ -n "${DEBUG}" ]; then
+            echo "Self-signed certificate, marking bad"
+        fi
+        RESULT="${MAX_FAIL_LEVEL}"
+    fi
 fi
 
 if [ "${RESULT}" == "OK" ]; then
@@ -97,9 +139,9 @@ elif [ "${RESULT}" == "CRITICAL" ]; then
     echo "${RESULT} ${HOSTNAME}"
     exit 2
 else
-    echo "RESULT:"
-    echo "${RESULT}"
-    echo "END RESULT"
+    echo "CMD_OUTPUT:"
+    echo "${CMD_OUTPUT}"
+    echo "END CMD_OUTPUT"
     echo "UNKNOWN for ${HOSTNAME}"
     exit 3
 fi
