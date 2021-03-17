@@ -1,0 +1,117 @@
+#!/bin/bash
+
+# checks certificate validity,
+# check_certificate <hostname> [-p,--port=<port>] [-d,--depth=<cert_verify_depth>]
+# port: defaults to port 443
+# depth: defaults to 2
+
+
+
+if [ -z "$1" ]; then
+    echo "Please specify at least a hostname...
+usage: check_certificate <hostname> [-p,--port=<port>] [-d,--depth=<cert_verify_depth>]"
+    exit 1
+fi
+
+HOSTNAME=$1
+
+# check to see if we're using LibreSSL because it doesn't support validation options.
+if [ "$(openssl version | grep -c LibreSSL)" -eq 1 ]; then
+    USING_LIBRESSL=1
+else
+    USING_LIBRESSL=0
+fi
+###########################
+### START ARGUMENT HANDLING
+for i in "${@:2}"
+do
+case $i in
+    -p=*|--port=*)
+    PORT="${i#*=}"
+    if [ -n "${DEBUG}" ]; then
+        echo "Setting port to ${PORT}"
+    fi
+    ;;
+    -d=*|--depth=*)
+    DEPTH="${i#*=}"
+    if [ -n "${DEBUG}" ]; then
+        echo "Setting certificate depth to ${DEPTH}"
+    fi
+    ;;
+    *)
+    echo "Unknown option: $i"
+    exit 3 # exit 3 = unknown in nagios
+    ;;
+esac
+done
+
+
+if [ -z "${PORT}" ]; then
+    PORT=443
+fi
+
+if [ -z "${DEPTH}" ]; then
+    DEPTH=2
+fi
+
+MAX_FAIL_LEVEL="CRITICAL"
+if [ "${USING_LIBRESSL}" -eq 1 ]; then
+    echo "You're using LibreSSL, disabling -verify_hostname and verify depth, setting max to WARNING" 1>&2
+    MAX_FAIL_LEVEL="WARNING"
+    if [ -n "${DEBUG}" ]; then
+        RESULT="$(printf "\n\n\n\n" | openssl s_client -connect "${HOSTNAME}:${PORT}" \
+            -servername "${HOSTNAME}" 2>&1)"
+    else
+        RESULT="$(printf "\n\n\n\n" | openssl s_client -connect "${HOSTNAME}:${PORT}" \
+            -servername "${HOSTNAME}" -quiet -no_ign_eof > /dev/null 2>&1)"
+    fi
+
+else
+    # using OpenSSL
+    if [ -n "${DEBUG}" ]; then
+        echo "Using verify depth ${DEPTH}"
+    fi
+
+    if [ -n "${DEBUG}" ]; then
+        RESULT="$(echo '/' | openssl s_client -connect "${HOSTNAME}:${PORT}" \
+            -servername "${HOSTNAME}" \
+            -verify "${DEPTH}" \
+            -verify_return_error \
+            -verify_hostname "${HOSTNAME}" 2>&1)"
+    else
+        RESULT="$(echo '/' | openssl s_client -connect "${HOSTNAME}:${PORT}" \
+            -servername "${HOSTNAME}" \
+            -verify "${DEPTH}" \
+            -verify_return_error \
+            -verify_hostname "${HOSTNAME}" -quiet 2>&1)"
+
+    fi
+fi
+
+ERROR_COUNT="$( echo "${RESULT}" | grep -c "verify error"  )"
+if [ -n "${DEBUG}" ]; then
+    echo "ERROR_COUNT: ${ERROR_COUNT}"
+fi
+
+if [ "${ERROR_COUNT}" -eq 0 ]; then
+    RESULT="OK"
+else
+    RESULT="${MAX_FAIL_LEVEL}"
+fi
+
+if [ "${RESULT}" == "OK" ]; then
+    echo "${RESULT} ${HOSTNAME}"
+    exit 0
+elif [ "${RESULT}" == "WARNING" ]; then
+    echo "${RESULT} ${HOSTNAME}"
+    exit 1
+elif [ "${RESULT}" == "CRITICAL" ]; then
+    echo "${RESULT} ${HOSTNAME}"
+    exit 2
+else
+    echo "RESULT:"
+    echo "${RESULT}"
+    echo "END RESULT"
+    echo "UNKNOWN for ${HOSTNAME}"
+    exit 3
+fi
